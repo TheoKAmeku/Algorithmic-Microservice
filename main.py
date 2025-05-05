@@ -9,14 +9,14 @@ app = FastAPI()
 #CORS middleware to allow requests from the frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5500"],  # The origin of your JS client
+    allow_origins=["http://127.0.0.1:5500"],  # The origin of JS Client (localhost)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 @app.post("/get_single_address_probability")
-def get_single_address_probability(requested_address: str = Body(..., embed=True)) -> dict:
+def get_single_address_probability(requested_address: str = Body(..., embed=True)):
     """
     Calculate the probability of a single address based on its neighborhood evaluation.
     Args:
@@ -26,7 +26,11 @@ def get_single_address_probability(requested_address: str = Body(..., embed=True
     Raises:
         ValueError: If the provided address is invalid or cannot be processed.
     """
+
     address_details = get_valid_address_details(requested_address)
+
+    if (type(address_details) == str):
+        return address_details
     address_data = get_address_data(address_details)
               
     return evaluate_neighborhood(address_data)
@@ -45,6 +49,7 @@ def get_many_addresses_probability(requested_addresses: list[str] = Body(..., em
         Any exceptions raised by the helper functions `get_valid_address_details`, 
         `get_address_data`, or `get_algorithm_results` will propagate to the caller.
     """
+
     all_addresses = []
     for requested_address in requested_addresses:
         # Check if the address is valid
@@ -58,7 +63,7 @@ def get_many_addresses_probability(requested_addresses: list[str] = Body(..., em
 
     return get_algorithm_results(all_addresses)
 
-def get_valid_address_details(address: str) -> dict:
+def get_valid_address_details(address: str):
     """
     Retrieves and validates the details of a given address.
     Args:
@@ -69,9 +74,11 @@ def get_valid_address_details(address: str) -> dict:
         HTTPException: If the address is invalid, with a 404 status code 
         and an error message.
     """
+
     details, is_valid, message = get_address_details(address)
     if not is_valid:
-        raise HTTPException(status_code=404, detail=message)
+        return message
+        #raise HTTPException(status_code=404, detail=message)
     
     return details
 
@@ -118,8 +125,9 @@ def get_address_details(address):
     address_details["lat"] = result["lat"]
     address_details["lon"] = result["lon"]
     
+    accepted_place_types = set(["residential", "postcode", "city"])
 
-    if result["type"] == "residential" or result["type"] == "postcode":
+    if  result["type"] in accepted_place_types:
         return address_details, True, "Address is valid"
     return {}, False, f"The address: {address} is invalid, please enter a residential address"
 
@@ -216,7 +224,7 @@ def get_crime_score(address_details) -> int:
     """
     lat = address_details.get("lat")
     lon = address_details.get("lon")
-    
+
     if not lat or not lon:
         return 25  # Fallback to mock if coordinates missing
 
@@ -228,9 +236,11 @@ def get_crime_score(address_details) -> int:
             "lng": lon,
             "date": "2025-02"
         }
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        crimes = response.json()
+
+        crimes = call_api(url, {}, params)
+        #response = requests.get(url, params=params, timeout=10)
+        #response.raise_for_status()
+        #crimes = response.json()
 
         # Calculate crime rate score (scaled 0-100)
         total_crimes = len(crimes)
@@ -255,20 +265,15 @@ def get_income_score(postcode, api_key='DEMO'):
     # Clean and encode the postcode
     postcode_clean = postcode.replace(" ", "").upper()
     url = f"https://crystalroof.co.uk/customer-api/income/mean-household-income/postcode/v1/{postcode_clean}?api_key={api_key}"
-    
-    response = requests.get(url)
-    
-    if response.status_code != 200:
-        raise ValueError(f"API request failed with status code {response.status_code}")
-    
-    data = response.json()
+
+    data = call_api(url, {}, {})
     
     # Extract the mean household income
     income = data.get("mean_household_income")
     if income is None:
         raise ValueError("Income data not found in the API response.")
     
-    # Normalize the income value (example range: £20,000 to £150,000)
+    # Normalize the income value
     income_score = normalize(income, 20000, 150000)
     
     return income_score
@@ -301,9 +306,9 @@ def get_residential_ratio(address, radius=200):
         'User-Agent': 'door-to-door-service-evaluator/1.0'
     }
 
-    response = requests.post(overpass_url, data=query, headers=headers)
-    response.raise_for_status()
-    data = response.json()
+    #response = requests.post(overpass_url, data=query, headers=headers)
+    #response.raise_for_status()
+    data = call_api(overpass_url, headers, { 'data': query })
 
     building_tags = [el.get('tags', {}).get('building', '').lower() for el in data.get('elements', [])]
 
@@ -320,42 +325,25 @@ def get_neighbourhood_data(address_details) -> dict:
     mock_data = {
         'population_density': get_population_density_score(address_details),
         'crime_rate': get_crime_score(address_details), #25,
-        'walkability': 80,
         'income': 60000, # get_income_score(address_details["postcode"])
         'residential_ratio': get_residential_ratio(address_details),# 0.8,
         'noise_level': 30,
-        'public_transport': 80,
-        'school_quality': 75,
         'healthcare_access': 85,
         'community_engagement': 70,
-        'housing_quality': 80,
         'environmental_quality': 75,
-        'cultural_diversity': 70,
-        'housing_affordability': 65,
-        'community_support': 80,
-        'local_government': 75
     }
     
     return mock_data
 
-# Adjusted Multi-Criteria Decision Analysis
 CRITERIA_WEIGHTS = {
     'population_density': 0.2,
     'crime_rate': 0.2,
-    'walkability': 0.05,
     'income': 0.15,
     'residential_ratio': 0.08,
     'noise_level': 0.05,
-    'public_transport': 0.05,
-    'school_quality': 0.18,
     'healthcare_access': 0.3,
     'community_engagement': 0.1,
-    'housing_quality': 0.08,
     'environmental_quality': 0.12,
-    'cultural_diversity': 0.09,
-    'housing_affordability': 0.1,
-    'community_support': 0.12,
-    'local_government': 0.12
 }
 
 def normalize(value, min_val, max_val, invert=False):
@@ -378,21 +366,13 @@ def evaluate_neighborhood(data: dict[str, float]) -> float:
     # Normalize each criterion (mock min/max range)
     normalized_scores = {
         'population_density': normalize(data['population_density'], 100, 10000),
-        'crime_rate': normalize(data['crime_rate'], 0, 100, invert=True),
-        'walkability': normalize(data['walkability'], 0, 100),
+        'crime_rate': normalize(data['crime_rate'], 0, 500, invert=True),
         'income': normalize(data['income'], 20000, 150000),
         'residential_ratio': normalize(data['residential_ratio'], 0, 1),
         'noise_level': normalize(data['noise_level'], 0, 100, invert=True),
-        'public_transport': normalize(data['public_transport'], 0, 100),
-        'school_quality': normalize(data['school_quality'], 0, 100),
         'healthcare_access': normalize(data['healthcare_access'], 0, 100),
         'community_engagement': normalize(data['community_engagement'], 0, 100),
-        'housing_quality': normalize(data['housing_quality'], 0, 100),
         'environmental_quality': normalize(data['environmental_quality'], 0, 100),
-        'cultural_diversity': normalize(data['cultural_diversity'], 0, 100),
-        'housing_affordability': normalize(data['housing_affordability'], 0, 100),
-        'community_support': normalize(data['community_support'], 0, 100),
-        'local_government': normalize(data['local_government'], 0, 100),
     }
 
     # Weighted sum
